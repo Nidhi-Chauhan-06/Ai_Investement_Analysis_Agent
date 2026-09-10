@@ -1,0 +1,559 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sequential Task Agent – Investment Analyst</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <!-- Chart.js for mini sparkline -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+</head>
+<body>
+
+<!-- ═══════════════ HEADER ═══════════════ -->
+<header class="site-header">
+  <div class="header-inner">
+    <div class="logo">
+      <span class="logo-icon">🤖</span>
+      <div>
+        <h1>Investment Analyst Agent</h1>
+        <p>Sequential AI-powered stock analysis · Powered by openai/gpt-oss-120b</p>
+      </div>
+    </div>
+    <div class="header-badge">Open-Source LLM</div>
+  </div>
+</header>
+
+<!-- ═══════════════ MAIN ═══════════════ -->
+<main class="container">
+
+  <!-- ── Search Bar ── -->
+  <section class="search-section card">
+    <h2 class="section-title">🔍 Analyse a Stock</h2>
+    <p class="section-sub">Enter any ticker symbol and the agent will run 6 sequential analytical tasks.</p>
+    <div class="search-row">
+      <input id="tickerInput" type="text" placeholder="e.g. AAPL, TSLA, MSFT, NVDA…"
+             maxlength="10" autocomplete="off" spellcheck="false" />
+      <button id="analyzeBtn" onclick="startAnalysis()">Analyse</button>
+    </div>
+    <div class="quick-tickers">
+      <span class="qt-label">Quick:</span>
+      <button class="qt-btn" onclick="quickTicker('AAPL')">AAPL</button>
+      <button class="qt-btn" onclick="quickTicker('TSLA')">TSLA</button>
+      <button class="qt-btn" onclick="quickTicker('MSFT')">MSFT</button>
+      <button class="qt-btn" onclick="quickTicker('NVDA')">NVDA</button>
+      <button class="qt-btn" onclick="quickTicker('AMZN')">AMZN</button>
+      <button class="qt-btn" onclick="quickTicker('GOOGL')">GOOGL</button>
+    </div>
+  </section>
+
+  <!-- ── Task Pipeline ── -->
+  <section id="pipelineSection" class="pipeline-section hidden">
+    <h2 class="section-title">⚙️ Sequential Task Pipeline</h2>
+    <div id="taskList" class="task-list"></div>
+  </section>
+
+  <!-- ── Results Dashboard ── -->
+  <section id="resultsSection" class="results-section hidden">
+
+    <!-- Stock Header -->
+    <div id="stockHeader" class="card stock-header"></div>
+
+    <!-- Grid: Technical + Fundamental -->
+    <div class="results-grid">
+      <div id="technicalCard" class="card result-card hidden">
+        <h3 class="card-title">📊 Technical Analysis</h3>
+        <div id="technicalContent"></div>
+      </div>
+      <div id="fundamentalCard" class="card result-card hidden">
+        <h3 class="card-title">🏦 Fundamental Analysis</h3>
+        <div id="fundamentalContent"></div>
+      </div>
+    </div>
+
+    <!-- Risk Assessment -->
+    <div id="riskCard" class="card result-card hidden">
+      <h3 class="card-title">⚠️ Risk Assessment</h3>
+      <div id="riskContent"></div>
+    </div>
+
+    <!-- News & Sentiment -->
+    <div id="newsCard" class="card result-card hidden">
+      <h3 class="card-title">📰 News & Sentiment Analysis</h3>
+      <div id="newsContent"></div>
+    </div>
+
+    <!-- Recommendation -->
+    <div id="recommendationCard" class="card result-card hidden">
+      <h3 class="card-title">💡 Investment Recommendation</h3>
+      <div id="recommendationContent"></div>
+    </div>
+
+    <!-- Chat -->
+    <div id="chatCard" class="card result-card hidden">
+      <h3 class="card-title">💬 Ask the Analyst</h3>
+      <div id="chatMessages" class="chat-messages"></div>
+      <div class="chat-input-row">
+        <input id="chatInput" type="text" placeholder="Ask a follow-up question about this stock…" />
+        <button onclick="sendChat()">Send</button>
+      </div>
+    </div>
+
+  </section>
+
+</main>
+
+<footer class="site-footer">
+  Sequential Task Agent · Investment Analyst · openai/gpt-oss-120b via Groq
+</footer>
+
+<script>
+// ─────────────────────────────────────────────
+// State
+// ─────────────────────────────────────────────
+let accumulatedData = {};
+let currentTicker = '';
+let sparklineChart = null;
+
+// ─────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────
+function $(id) { return document.getElementById(id); }
+
+function fmt(val, digits = 2, suffix = '') {
+  if (val === null || val === undefined) return '<span class="na">N/A</span>';
+  const n = parseFloat(val);
+  if (isNaN(n)) return val;
+  const abs = Math.abs(n);
+  if (abs >= 1e12) return (n / 1e12).toFixed(2) + 'T' + suffix;
+  if (abs >= 1e9)  return (n / 1e9).toFixed(2) + 'B' + suffix;
+  if (abs >= 1e6)  return (n / 1e6).toFixed(2) + 'M' + suffix;
+  return n.toFixed(digits) + suffix;
+}
+
+function fmtPct(val) {
+  if (val === null || val === undefined) return '<span class="na">N/A</span>';
+  const n = parseFloat(val) * 100;
+  const cls = n >= 0 ? 'positive' : 'negative';
+  return `<span class="${cls}">${n.toFixed(2)}%</span>`;
+}
+
+function fmtChange(val) {
+  if (val === null || val === undefined) return '<span class="na">N/A</span>';
+  const n = parseFloat(val);
+  const cls = n >= 0 ? 'positive' : 'negative';
+  const sign = n >= 0 ? '+' : '';
+  return `<span class="${cls}">${sign}${n.toFixed(2)}%</span>`;
+}
+
+function row(label, value) {
+  return `<div class="data-row"><span class="data-label">${label}</span><span class="data-value">${value}</span></div>`;
+}
+
+function badge(text, type) {
+  return `<span class="badge badge-${type}">${text}</span>`;
+}
+
+function quickTicker(t) {
+  $('tickerInput').value = t;
+  startAnalysis();
+}
+
+// ─────────────────────────────────────────────
+// Task Pipeline UI
+// ─────────────────────────────────────────────
+function initPipeline(tasks) {
+  const list = $('taskList');
+  list.innerHTML = '';
+  tasks.forEach((t, i) => {
+    const div = document.createElement('div');
+    div.className = 'task-item task-pending';
+    div.id = 'task_' + t.id;
+    div.innerHTML = `
+      <div class="task-num">${i + 1}</div>
+      <div class="task-icon">${t.icon}</div>
+      <div class="task-info">
+        <div class="task-name">${t.name}</div>
+        <div class="task-desc">${t.description}</div>
+      </div>
+      <div class="task-status" id="status_${t.id}">
+        <span class="status-dot dot-pending"></span>Pending
+      </div>`;
+    list.appendChild(div);
+  });
+}
+
+function setTaskRunning(id) {
+  const el = $('task_' + id);
+  if (!el) return;
+  el.className = 'task-item task-running';
+  $('status_' + id).innerHTML = '<span class="status-dot dot-running"></span>Running…';
+}
+
+function setTaskDone(id) {
+  const el = $('task_' + id);
+  if (!el) return;
+  el.className = 'task-item task-done';
+  $('status_' + id).innerHTML = '<span class="status-dot dot-done"></span>Done';
+}
+
+function setTaskError(id) {
+  const el = $('task_' + id);
+  if (!el) return;
+  el.className = 'task-item task-error';
+  $('status_' + id).innerHTML = '<span class="status-dot dot-error"></span>Error';
+}
+
+// ─────────────────────────────────────────────
+// Main Analysis
+// ─────────────────────────────────────────────
+async function startAnalysis() {
+  const ticker = $('tickerInput').value.trim().toUpperCase();
+  if (!ticker) { alert('Please enter a ticker symbol.'); return; }
+
+  currentTicker = ticker;
+  accumulatedData = {};
+
+  // Reset UI
+  $('pipelineSection').classList.remove('hidden');
+  $('resultsSection').classList.add('hidden');
+  ['technicalCard','fundamentalCard','riskCard','newsCard','recommendationCard','chatCard']
+    .forEach(id => $( id).classList.add('hidden'));
+  $('stockHeader').innerHTML = '';
+  $('analyzeBtn').disabled = true;
+  $('analyzeBtn').textContent = 'Analysing…';
+
+  // Fetch task definitions and init pipeline
+  const taskDefs = await fetch('/api/tasks').then(r => r.json()).then(d => d.tasks);
+  initPipeline(taskDefs);
+
+  try {
+    const response = await fetch('/api/analyze', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ticker }),
+    });
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+      for (const line of lines) {
+        if (line.trim()) processEvent(JSON.parse(line));
+      }
+    }
+    if (buffer.trim()) processEvent(JSON.parse(buffer));
+
+  } catch (err) {
+    console.error(err);
+    alert('Network error: ' + err.message);
+  } finally {
+    $('analyzeBtn').disabled = false;
+    $('analyzeBtn').textContent = 'Analyse';
+  }
+}
+
+function processEvent(evt) {
+  if (evt.event === 'task_start') {
+    setTaskRunning(evt.task_id);
+  } else if (evt.event === 'task_complete') {
+    setTaskDone(evt.task_id);
+    accumulatedData[evt.task_id] = evt.data;
+    renderTaskResult(evt.task_id, evt.data);
+  } else if (evt.event === 'task_error') {
+    setTaskError(evt.task_id);
+  } else if (evt.event === 'analysis_error') {
+    alert('Analysis error: ' + evt.error);
+  } else if (evt.event === 'analysis_complete') {
+    $('chatCard').classList.remove('hidden');
+  }
+}
+
+// ─────────────────────────────────────────────
+// Render each task result
+// ─────────────────────────────────────────────
+function renderTaskResult(taskId, data) {
+  $('resultsSection').classList.remove('hidden');
+
+  if (taskId === 'task_1') renderMarketData(data);
+  else if (taskId === 'task_2') renderTechnical(data);
+  else if (taskId === 'task_3') renderFundamental(data);
+  else if (taskId === 'task_4') renderRisk(data);
+  else if (taskId === 'task_5') renderNews(data);
+  else if (taskId === 'task_6') renderRecommendation(data);
+}
+
+// ── Task 1: Market Data ──
+function renderMarketData(d) {
+  const chg = parseFloat(d.change_pct || 0);
+  const chgCls = chg >= 0 ? 'positive' : 'negative';
+  const chgSign = chg >= 0 ? '+' : '';
+
+  $('stockHeader').innerHTML = `
+    <div class="sh-left">
+      <div class="sh-name">${d.company_name}</div>
+      <div class="sh-meta">${d.ticker} · ${d.exchange} · ${d.sector}</div>
+      <div class="sh-industry">${d.industry}</div>
+    </div>
+    <div class="sh-center">
+      <div class="sh-price">${d.currency} ${fmt(d.current_price)}</div>
+      <div class="sh-change ${chgCls}">${chgSign}${chg.toFixed(2)}% today</div>
+      <div class="sh-cap">Market Cap: ${fmt(d.market_cap)}</div>
+    </div>
+    <div class="sh-right">
+      <canvas id="sparkline" width="200" height="70"></canvas>
+    </div>`;
+
+  // Draw sparkline
+  setTimeout(() => {
+    const ctx = document.getElementById('sparkline');
+    if (!ctx) return;
+    if (sparklineChart) sparklineChart.destroy();
+    sparklineChart = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: d.hist_dates,
+        datasets: [{
+          data: d.hist_closes,
+          borderColor: chg >= 0 ? '#22c55e' : '#ef4444',
+          backgroundColor: chg >= 0 ? 'rgba(34,197,94,0.1)' : 'rgba(239,68,68,0.1)',
+          fill: true,
+          tension: 0.4,
+          pointRadius: 0,
+          borderWidth: 2,
+        }]
+      },
+      options: {
+        animation: false,
+        plugins: { legend: { display: false }, tooltip: { enabled: false } },
+        scales: { x: { display: false }, y: { display: false } },
+      }
+    });
+  }, 50);
+}
+
+// ── Task 2: Technical ──
+function renderTechnical(d) {
+  const rsiCls = d.rsi_signal === 'Oversold' ? 'positive' : d.rsi_signal === 'Overbought' ? 'negative' : '';
+  const macdCls = d.macd && d.macd > 0 ? 'positive' : 'negative';
+
+  $('technicalContent').innerHTML = `
+    <div class="metrics-group">
+      ${row('RSI (14)', `<span class="${rsiCls}">${fmt(d.rsi)} — ${d.rsi_signal}</span>`)}
+      ${row('MACD', `<span class="${macdCls}">${fmt(d.macd)}</span>`)}
+      ${row('MACD Signal', fmt(d.macd_signal))}
+    </div>
+    <div class="metrics-group">
+      ${row('SMA 20', fmt(d.sma_20))}
+      ${row('SMA 50', fmt(d.sma_50))}
+      ${row('SMA 200', fmt(d.sma_200))}
+    </div>
+    <div class="metrics-group">
+      ${row('BB Upper', fmt(d.bb_upper))}
+      ${row('BB Middle', fmt(d.bb_middle))}
+      ${row('BB Lower', fmt(d.bb_lower))}
+    </div>
+    <div class="trend-pills">
+      ${pill('vs SMA20', d.above_sma20)}
+      ${pill('vs SMA50', d.above_sma50)}
+      ${pill('vs SMA200', d.above_sma200)}
+    </div>`;
+  $('technicalCard').classList.remove('hidden');
+}
+
+function pill(label, above) {
+  if (above === null || above === undefined) return '';
+  const cls = above ? 'pill-green' : 'pill-red';
+  const txt = above ? '▲ Above' : '▼ Below';
+  return `<span class="trend-pill ${cls}">${label}: ${txt}</span>`;
+}
+
+// ── Task 3: Fundamental ──
+function renderFundamental(d) {
+  const recCls = {
+    buy: 'positive', strongbuy: 'positive',
+    sell: 'negative', strongsell: 'negative',
+  }[d.recommendation?.toLowerCase()] || '';
+
+  $('fundamentalContent').innerHTML = `
+    <div class="metrics-group">
+      ${row('P/E (TTM)', fmt(d.pe_ratio))}
+      ${row('Forward P/E', fmt(d.forward_pe))}
+      ${row('PEG Ratio', fmt(d.peg_ratio))}
+      ${row('P/B Ratio', fmt(d.price_to_book))}
+      ${row('P/S Ratio', fmt(d.price_to_sales))}
+    </div>
+    <div class="metrics-group">
+      ${row('EPS (TTM)', fmt(d.eps_trailing))}
+      ${row('EPS (Fwd)', fmt(d.eps_forward))}
+      ${row('Revenue Growth', fmtPct(d.revenue_growth))}
+      ${row('Gross Margin', fmtPct(d.gross_margin))}
+      ${row('Profit Margin', fmtPct(d.profit_margin))}
+    </div>
+    <div class="metrics-group">
+      ${row('D/E Ratio', fmt(d.debt_to_equity))}
+      ${row('Current Ratio', fmt(d.current_ratio))}
+      ${row('ROE', fmtPct(d.roe))}
+      ${row('ROA', fmtPct(d.roa))}
+      ${row('Dividend Yield', fmtPct(d.dividend_yield))}
+    </div>
+    <div class="metrics-group">
+      ${row('Analyst Target', fmt(d.analyst_target))}
+      ${row('Consensus', `<span class="${recCls}">${(d.recommendation || 'N/A').toUpperCase()}</span>`)}
+      ${row('# Analysts', d.analyst_count ?? '<span class="na">N/A</span>')}
+    </div>`;
+  $('fundamentalCard').classList.remove('hidden');
+}
+
+// ── Task 4: Risk ──
+function renderRisk(d) {
+  const riskCls = { High: 'badge-red', Medium: 'badge-yellow', Low: 'badge-green' }[d.risk_level] || 'badge-grey';
+  $('riskContent').innerHTML = `
+    <div class="risk-badge-row">
+      Overall Risk: ${badge(d.risk_level, riskCls.replace('badge-', ''))}
+    </div>
+    <div class="metrics-grid-3">
+      ${metricBox('Beta', fmt(d.beta), 'Market sensitivity')}
+      ${metricBox('Annual Vol', fmt(d.annual_volatility, 4), 'Annualised std dev')}
+      ${metricBox('Max Drawdown', fmt(d.max_drawdown, 4), 'Worst peak-to-trough')}
+      ${metricBox('Sharpe Ratio', fmt(d.sharpe_ratio), 'Risk-adjusted return')}
+      ${metricBox('Sortino Ratio', fmt(d.sortino_ratio), 'Downside-adjusted')}
+      ${metricBox('VaR (95%)', fmt(d.var_95_daily, 4), '1-day 95% Value at Risk')}
+    </div>`;
+  $('riskCard').classList.remove('hidden');
+}
+
+function metricBox(title, value, sub) {
+  return `<div class="metric-box"><div class="mb-val">${value}</div><div class="mb-title">${title}</div><div class="mb-sub">${sub}</div></div>`;
+}
+
+// ── Task 5: News & Sentiment ──
+function renderNews(d) {
+  const analysis = d.analysis || {};
+  const sentCls = { Bullish: 'badge-green', Bearish: 'badge-red', Neutral: 'badge-grey' }[analysis.sentiment] || 'badge-grey';
+  const confCls = { High: 'badge-green', Medium: 'badge-yellow', Low: 'badge-grey' }[analysis.confidence] || 'badge-grey';
+
+  const themes = (analysis.themes || []).map(t => `<li>${t}</li>`).join('');
+  const risks = (analysis.risks || []).map(r => `<li class="negative">⚠ ${r}</li>`).join('');
+  const opps = (analysis.opportunities || []).map(o => `<li class="positive">✓ ${o}</li>`).join('');
+  const headlines = (d.headlines || []).map(h => `<div class="headline">📌 ${h}</div>`).join('');
+
+  $('newsContent').innerHTML = `
+    <div class="sentiment-badges">
+      Sentiment: ${badge(analysis.sentiment || 'N/A', sentCls.replace('badge-', ''))}
+      Confidence: ${badge(analysis.confidence || 'N/A', confCls.replace('badge-', ''))}
+    </div>
+    <p class="sentiment-summary">${analysis.summary || ''}</p>
+    <div class="news-grid">
+      <div><h4>Key Themes</h4><ul>${themes}</ul></div>
+      <div><h4>Risks</h4><ul>${risks}</ul></div>
+      <div><h4>Opportunities</h4><ul>${opps}</ul></div>
+    </div>
+    <div class="headlines-section"><h4>Recent Headlines</h4>${headlines}</div>`;
+  $('newsCard').classList.remove('hidden');
+}
+
+// ── Task 6: Recommendation ──
+function renderRecommendation(d) {
+  const decCls = { BUY: 'rec-buy', HOLD: 'rec-hold', SELL: 'rec-sell' }[d.decision] || 'rec-hold';
+  const convCls = { High: 'badge-green', Medium: 'badge-yellow', Low: 'badge-grey' }[d.conviction] || 'badge-grey';
+
+  const bulls = (d.bull_case || []).map(b => `<li class="positive">🟢 ${b}</li>`).join('');
+  const bears = (d.bear_case || []).map(b => `<li class="negative">🔴 ${b}</li>`).join('');
+  const cats  = (d.catalysts || []).map(c => `<li>⚡ ${c}</li>`).join('');
+
+  $('recommendationContent').innerHTML = `
+    <div class="rec-header">
+      <div class="rec-decision ${decCls}">${d.decision || 'N/A'}</div>
+      <div class="rec-meta">
+        <div>Conviction: ${badge(d.conviction || 'N/A', convCls.replace('badge-', ''))}</div>
+        <div>Target: <strong>${d.target_price || 'N/A'}</strong></div>
+        <div>Horizon: <strong>${d.time_horizon || 'N/A'}</strong></div>
+        <div>Position Size: <strong>${d.position_size || 'N/A'}</strong></div>
+      </div>
+    </div>
+    <div class="rec-thesis">
+      <h4>Investment Thesis</h4>
+      <p>${d.thesis || ''}</p>
+    </div>
+    <p class="rec-summary">${d.summary || ''}</p>
+    <div class="rec-grid">
+      <div><h4>🐂 Bull Case</h4><ul>${bulls}</ul></div>
+      <div><h4>🐻 Bear Case</h4><ul>${bears}</ul></div>
+      <div><h4>⚡ Key Catalysts</h4><ul>${cats}</ul></div>
+    </div>`;
+  $('recommendationCard').classList.remove('hidden');
+}
+
+// ─────────────────────────────────────────────
+// Chat
+// ─────────────────────────────────────────────
+async function sendChat() {
+  const input = $('chatInput');
+  const q = input.value.trim();
+  if (!q) return;
+
+  appendChat('user', q);
+  input.value = '';
+
+  // Build context summary from accumulated data
+  const ctx = buildContext();
+
+  const thinkingId = 'thinking_' + Date.now();
+  appendChat('agent', '…', thinkingId);
+
+  try {
+    const res = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question: q, context: ctx }),
+    });
+    const data = await res.json();
+    document.getElementById(thinkingId).querySelector('.chat-bubble').textContent = data.answer || 'No response.';
+  } catch (e) {
+    document.getElementById(thinkingId).querySelector('.chat-bubble').textContent = 'Error: ' + e.message;
+  }
+}
+
+function appendChat(role, text, id) {
+  const msgs = $('chatMessages');
+  const div = document.createElement('div');
+  div.className = `chat-msg chat-${role}`;
+  if (id) div.id = id;
+  div.innerHTML = `<span class="chat-avatar">${role === 'user' ? '👤' : '🤖'}</span><span class="chat-bubble">${text}</span>`;
+  msgs.appendChild(div);
+  msgs.scrollTop = msgs.scrollHeight;
+}
+
+function buildContext() {
+  const t1 = accumulatedData['task_1'] || {};
+  const t2 = accumulatedData['task_2'] || {};
+  const t3 = accumulatedData['task_3'] || {};
+  const t4 = accumulatedData['task_4'] || {};
+  const t6 = accumulatedData['task_6'] || {};
+  return `Stock: ${t1.company_name} (${currentTicker}), Price: ${t1.current_price}, Sector: ${t1.sector}
+RSI: ${t2.rsi}, MACD: ${t2.macd}, SMA Signal: ${t2.rsi_signal}
+P/E: ${t3.pe_ratio}, Revenue Growth: ${t3.revenue_growth}, ROE: ${t3.roe}
+Beta: ${t4.beta}, Sharpe: ${t4.sharpe_ratio}, Risk: ${t4.risk_level}
+Recommendation: ${t6.decision}, Target: ${t6.target_price}, Conviction: ${t6.conviction}`;
+}
+
+// Enter key support
+document.addEventListener('DOMContentLoaded', () => {
+  $('tickerInput').addEventListener('keydown', e => {
+    if (e.key === 'Enter') startAnalysis();
+  });
+  $('chatInput').addEventListener('keydown', e => {
+    if (e.key === 'Enter') sendChat();
+  });
+});
+</script>
+
+</body>
+</html>
